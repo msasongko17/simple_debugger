@@ -6,6 +6,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_map>
+#include <sys/personality.h>
 #include "linenoise.h"
 
 class breakpoint {
@@ -140,6 +141,7 @@ int main(int argc, char* argv[]) {
 	if(pid == 0) {
 		// we're in the child process
 		std::cerr << "before ptrace_traceme\n";
+		//personality(ADDR_NO_RANDOMIZE);
 		ptrace(PTRACE_TRACEME, 0, nullptr, nullptr);
 		std::cerr << "after ptrace_traceme\n";
 		execl(prog, prog, nullptr);
