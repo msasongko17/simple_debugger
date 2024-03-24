@@ -136,7 +136,37 @@ private:
 	void dump_registers();
 	uint64_t read_memory(uint64_t address);
 	void write_memory(uint64_t address, uint64_t value);
+	uint64_t get_pc();
+	void set_pc(uint64_t pc);
+	void step_over_breakpoint();
+	void wait_for_signal();
 };
+
+uint64_t debugger::get_pc() {
+	return get_register_value(m_pid, reg::rip);
+}
+
+void debugger::set_pc(uint64_t pc) {
+	set_register_value(m_pid, reg::rip, pc);
+}
+
+void debugger::step_over_breakpoint() {
+	auto possible_breakpoint_location = get_pc() - 1;
+
+	if (m_breakpoints.count(possible_breakpoint_location)) {
+		auto& bp = m_breakpoints[possible_breakpoint_location];
+
+		if (bp.is_enabled()) {
+			auto previous_instruction_address = possible_breakpoint_location;
+			set_pc(previous_instruction_address);
+
+			bp.disable();
+			ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
+			wait_for_signal();
+			bp.enable();
+		}
+	}
+}
 
 void debugger::dump_registers() {
         for (const auto& rd : g_register_descriptors) {
@@ -185,6 +215,7 @@ void debugger::run() {
 	}
 }
 
+#if 0
 void debugger::continue_execution() {
         ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
 
@@ -194,6 +225,7 @@ void debugger::continue_execution() {
         waitpid(m_pid, &wait_status, options);
 	std::cerr << "after waitpid\n";
 }
+#endif
 
 uint64_t debugger::read_memory(uint64_t address) {
 	return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
@@ -201,6 +233,18 @@ uint64_t debugger::read_memory(uint64_t address) {
 
 void debugger::write_memory(uint64_t address, uint64_t value) {
 	ptrace(PTRACE_POKEDATA, m_pid, address, value);
+}
+
+void debugger::wait_for_signal() {
+	int wait_status;
+	auto options = 0;
+	waitpid(m_pid, &wait_status, options);
+}
+
+void debugger::continue_execution() {
+	step_over_breakpoint();
+	ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
+	wait_for_signal();
 }
 
 std::vector<std::string> split(const std::string &s, char delimiter) {
