@@ -10,6 +10,8 @@
 #include <sys/user.h>
 #include <algorithm>
 #include <iomanip>
+#include <dwarf.h>
+#include <libdwarf.h>
 #include "linenoise.h"
 
 enum class reg {
@@ -122,12 +124,22 @@ private:
 class debugger {
 public:
 	debugger (std::string prog_name, pid_t pid)
-		: m_prog_name{std::move(prog_name)}, m_pid{pid} {}
-
+		: m_prog_name{std::move(prog_name)}, m_pid{pid} {
+		Dwarf_Error error;
+		dwarf_init_path(m_prog_name.c_str(), nullptr, 0,
+				DW_GROUPNUMBER_ANY, 0, nullptr, 
+				&dbg, &error);
+		std::cerr << "constructor called\n";
+	}
+	~debugger () {
+		dwarf_finish(dbg);
+		std::cerr << "destructor called\n";
+	}
 	void run();
 	void set_breakpoint_at_address(std::intptr_t addr);
 
 private:
+	Dwarf_Debug dbg;
 	std::string m_prog_name;
 	pid_t m_pid;
 	std::unordered_map<std::intptr_t, breakpoint> m_breakpoints;
