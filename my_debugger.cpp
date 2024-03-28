@@ -156,6 +156,7 @@ private:
 	void wait_for_signal();
 	void initialize_load_address();
 	uint64_t offset_load_address(uint64_t addr);
+	void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context);
 };
 
 uint64_t debugger::get_pc() {
@@ -216,6 +217,36 @@ void debugger::initialize_load_address() {
 
 uint64_t debugger::offset_load_address(uint64_t addr) {
 	return addr - m_load_address;
+}
+
+void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
+	std::ifstream file {file_name};
+
+	auto start_line = line <= n_lines_context ? 1 : line - n_lines_context;
+	auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line: 0) + 1;
+
+	char c{};
+	auto current_line = 1u;
+	//Skip lines up until start line
+	while (current_line != start_line && file.get(c)) {
+		if(c == '\n') {
+			++current_line;
+		}
+	}
+
+	//Output cursor if we are at the current line
+	std::cerr << (current_line==line ? "> " : " ");
+
+	// write lines up until end line
+	while (current_line <= end_line && file.get(c)) {
+		std::cerr << c;
+		if(c == '\n') {
+			++current_line;
+			std::cerr << (current_line==line ? "> ": " ");
+		}
+	}
+
+	std::cerr << "\n";
 }
 
 void breakpoint::enable() {
