@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <dwarf.h>
 #include <libdwarf.h>
+#include <fstream>
 #include "linenoise.h"
 
 enum class reg {
@@ -141,6 +142,7 @@ public:
 private:
 	Dwarf_Debug dbg;
 	std::string m_prog_name;
+	uint64_t m_load_address;
 	pid_t m_pid;
 	std::unordered_map<std::intptr_t, breakpoint> m_breakpoints;
 	void continue_execution();
@@ -152,6 +154,8 @@ private:
 	void set_pc(uint64_t pc);
 	void step_over_breakpoint();
 	void wait_for_signal();
+	void initialize_load_address();
+	uint64_t offset_load_address(uint64_t addr);
 };
 
 uint64_t debugger::get_pc() {
@@ -194,6 +198,26 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 	m_breakpoints[addr] = bp;
 }
 
+void debugger::initialize_load_address() {
+	std::ifstream map("/proc/" + std::to_string(m_pid) + "/maps");
+	std::string line;
+	while(getline(map, line)) {
+		// trim m_prog_name until after the last /
+		std::string s(line);
+		std::string exec_name(m_prog_name);
+        	if(s.erase(0, s.find_last_of("/")+1) == exec_name.erase(0, exec_name.find_last_of("/")+1)) {
+			line.erase(line.find_first_of("-"), line.length() - line.find_first_of("-"));
+			m_load_address = std::stol(line, 0, 16);
+			break;
+		}
+	}
+	//std::cerr << std::hex << m_load_address << "\n";
+}
+
+uint64_t debugger::offset_load_address(uint64_t addr) {
+	return addr - m_load_address;
+}
+
 void breakpoint::enable() {
 	auto data = ptrace(PTRACE_PEEKDATA, m_pid, m_addr, nullptr);
 	m_saved_data = static_cast<uint8_t>(data & 0xff); //save bottom byte
@@ -218,7 +242,7 @@ void debugger::run() {
 	std::cerr << "before waitpid\n";
 	waitpid(m_pid, &wait_status, options);
 	std::cerr << "after waitpid\n";
-
+	initialize_load_address();
 	char* line = nullptr;
 	while((line = linenoise("minidbg> ")) != nullptr) {
 		handle_command(line);
