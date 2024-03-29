@@ -161,7 +161,9 @@ private:
 	siginfo_t get_signal_info();
         void handle_sigtrap(siginfo_t info);
 	int get_line_entry(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line* line_die, uint64_t pc, Dwarf_Line_Context* line_context);
-	void get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, uint64_t pc, Dwarf_Line_Context* line_context);	
+	void get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, uint64_t pc, Dwarf_Line_Context* line_context);
+	void single_step_instruction();
+	void single_step_instruction_with_breakpoint_check();	
 };
 
 uint64_t debugger::get_pc() {
@@ -247,6 +249,21 @@ void debugger::print_source(const std::string& file_name, unsigned line, unsigne
 	}
 
 	std::cerr << "\n";
+}
+
+void debugger::single_step_instruction() {
+	ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
+	wait_for_signal();
+}
+
+void debugger::single_step_instruction_with_breakpoint_check() {
+	//first, check to see if we need to disable and enable a breakpoint
+	if(m_breakpoints.count(get_pc())) {
+		step_over_breakpoint();
+	}
+	else {
+		single_step_instruction();
+	}
 }
 
 siginfo_t debugger::get_signal_info() {
@@ -643,6 +660,25 @@ void debugger::handle_command(const std::string& line) {
 			std::string val{ args[3], 2};
 			write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
 		}
+	} 
+	else if(is_prefix(command, "stepi")) {
+		single_step_instruction_with_breakpoint_check();
+		auto offset_pc = offset_load_address(get_pc());
+                //auto line_entry = get_line_entry_from_pc(offset_pc);
+                Dwarf_Line_Context line_context = 0;
+                Dwarf_Line line_die = nullptr;
+                get_line_die_by_pc(dbg, &line_die, offset_pc, &line_context);
+                if(line_die != nullptr) {
+			long long unsigned int lineno;
+			char *filename;
+			Dwarf_Error error;
+			//Dwarf_Addr line_addr;
+			dwarf_lineno(line_die, &lineno, &error);
+			dwarf_linesrc(line_die, &filename, &error);
+			print_source(filename, lineno, 5);
+                        //dwarf_lineaddr(line_die, &line_addr, &error);
+                        //std::cerr << "file " << filename << ", line no " << std::dec << lineno << ", address " << std::hex << line_addr << "\n";
+		}	 
 	}
 	else {
 		std::cerr << "Unknown command\n";
