@@ -164,6 +164,11 @@ private:
 	void get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, uint64_t pc, Dwarf_Line_Context* line_context);
 	void single_step_instruction();
 	void single_step_instruction_with_breakpoint_check();	
+	void step_out();
+	uint64_t get_offset_pc();
+	void remove_breakpoint(std::intptr_t addr);
+	long long unsigned int get_line_no_from_pc(uint64_t offset_pc);
+	void step_in();
 };
 
 uint64_t debugger::get_pc() {
@@ -219,6 +224,10 @@ void debugger::initialize_load_address() {
 
 uint64_t debugger::offset_load_address(uint64_t addr) {
 	return addr - m_load_address;
+}
+
+uint64_t debugger::get_offset_pc() {
+	return offset_load_address(get_pc());
 }
 
 void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
@@ -488,7 +497,7 @@ void debugger::get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, uint64_
         Dwarf_Half header_cu_type = 0;
         Dwarf_Error error;
 
-        std::cout << "iteration " << i << "\n";
+        //std::cout << "iteration " << i << "\n";
         int res = dwarf_next_cu_header_d(
             dbg,
             true, // is_info
@@ -523,9 +532,81 @@ void debugger::get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, uint64_
             //iterate_dies_recursively(dbg, sibling_die);
 	    get_line_entry(sibling_die,&error, line_die, pc, line_context);
             dwarf_dealloc(dbg, sibling_die, DW_DLA_DIE);
+	    //if(*line_die != nullptr)
+		    //break;
         }
         i++;
     }
+}
+
+void debugger::step_out() {
+	auto frame_pointer = get_register_value(m_pid, reg::rbp);
+	auto return_address = read_memory(frame_pointer+8);
+
+	bool should_remove_breakpoint = false;
+	if (!m_breakpoints.count(return_address)) {
+		set_breakpoint_at_address(return_address);
+		should_remove_breakpoint = true;
+	}
+
+	continue_execution();
+
+	if (should_remove_breakpoint) {
+		remove_breakpoint(return_address);
+	}
+}
+
+void debugger::remove_breakpoint(std::intptr_t addr) {
+	if(m_breakpoints.at(addr).is_enabled()) {
+		m_breakpoints.at(addr).disable();
+	}
+	m_breakpoints.erase(addr);
+}
+
+long long unsigned int debugger::get_line_no_from_pc(uint64_t offset_pc) {
+	std::cerr << "searched pc " << offset_pc << "\n";
+	Dwarf_Line_Context line_context = 0;
+        Dwarf_Line line_die = nullptr;
+        get_line_die_by_pc(dbg, &line_die, offset_pc, &line_context);
+	long long unsigned int lineno = 0;
+        if(line_die != nullptr) {
+		std::cerr << "non-null line_die found\n";
+                //char *filename;
+                Dwarf_Error error;
+                //Dwarf_Addr line_addr;
+                dwarf_lineno(line_die, &lineno, &error);
+		//std::cerr << "line number " << lineno << "\n";
+                //print_source(filename, lineno, 5);
+        }
+	return lineno;
+}
+
+void debugger::step_in() {
+	auto line = get_line_no_from_pc(get_offset_pc());
+	if(line == 0) {
+		std::cerr << "Error in getting the source code line, please compile the profiled application with -g flag.\n";
+		return;
+	}
+
+	std::cerr << "stepping to line " << line << "\n";	
+	while (get_line_no_from_pc(get_offset_pc()) == line) {
+		single_step_instruction_with_breakpoint_check();
+	}
+
+	auto offset_pc = get_offset_pc();
+	//auto line_entry = get_line_entry_from_pc(offset_pc);
+	Dwarf_Line_Context line_context = 0;
+	Dwarf_Line line_die = nullptr;
+	get_line_die_by_pc(dbg, &line_die, offset_pc, &line_context);
+        if(line_die != nullptr) {
+		long long unsigned int lineno;
+		char *filename;
+		Dwarf_Error error;
+		//Dwarf_Addr line_addr;
+		dwarf_lineno(line_die, &lineno, &error);
+		dwarf_linesrc(line_die, &filename, &error);
+		print_source(filename, lineno, 5);
+	}	
 }
 
 void breakpoint::enable() {
@@ -667,6 +748,7 @@ void debugger::handle_command(const std::string& line) {
                 //auto line_entry = get_line_entry_from_pc(offset_pc);
                 Dwarf_Line_Context line_context = 0;
                 Dwarf_Line line_die = nullptr;
+		std::cerr << "searched pc " << offset_pc << "\n";
                 get_line_die_by_pc(dbg, &line_die, offset_pc, &line_context);
                 if(line_die != nullptr) {
 			long long unsigned int lineno;
@@ -679,6 +761,12 @@ void debugger::handle_command(const std::string& line) {
                         //dwarf_lineaddr(line_die, &line_addr, &error);
                         //std::cerr << "file " << filename << ", line no " << std::dec << lineno << ", address " << std::hex << line_addr << "\n";
 		}	 
+	}
+	else if(is_prefix(command, "stepin")) {
+		step_in();
+	}
+	else if(is_prefix(command, "stepout")) {
+		step_out();
 	}
 	else {
 		std::cerr << "Unknown command\n";
