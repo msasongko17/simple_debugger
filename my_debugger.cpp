@@ -177,6 +177,10 @@ private:
 	void get_func_die_by_pc(Dwarf_Debug dbg, Dwarf_Die* func_die, uint64_t pc);
 	Dwarf_Addr get_pc_from_line_die(Dwarf_Line line_die);
 	int get_linebuf(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line  **linebuf, Dwarf_Signed* linecount, uint64_t pc, Dwarf_Line_Context* line_context);
+	void set_breakpoint_at_function(const std::string& name);
+	void set_breakpoint_at_source_line(const std::string& file, unsigned line);
+	void get_func_die_by_name(Dwarf_Debug dbg, Dwarf_Die* func_die, const std::string& name);
+	void search_func_recursively_by_name(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Die* func_die, const std::string& searched_name);
 };
 
 uint64_t debugger::get_pc() {
@@ -919,6 +923,58 @@ void debugger::iterate_dies_recursively(
     }
 }
 
+void debugger::search_func_recursively_by_name(
+  Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Die* func_die, const std::string& searched_name
+) {
+
+    Dwarf_Error error;
+
+    // get die tag (namespace, class, member, etc...)
+    Dwarf_Half tag = 0;
+    dwarf_tag(die, &tag, &error);
+
+    char* name = nullptr;
+    dwarf_die_text(die, DW_AT_name, &name, &error);
+    if(!name) name = const_cast<char*>("");
+    // process children
+    Dwarf_Die child = nullptr;
+    if(dwarf_child(die, &child, &error) == DW_DLV_OK && child) {
+        search_func_recursively_by_name(
+            dbg, child, func_die, searched_name
+        );
+        dwarf_dealloc(dbg, child, DW_DLA_DIE);
+        if(*func_die != nullptr)
+                return;
+    }
+
+    //child = nullptr;
+    if(tag == DW_TAG_subprogram) {
+            //char* name = nullptr;
+            //get_func_pcs(dbg, die, &lowpc, &highpc)
+	    //std::cerr << "before dwarf_die_text\n";
+	    //dwarf_die_text(die, DW_AT_name, &name, &error);
+	    const std::string& func_name(name);
+	    std::cerr << "after dwarf_die_text\n";
+	    std::cerr << "function " << func_name << " found, searching for " << searched_name << "\n";
+	    if(func_name == searched_name) {
+		    std::cerr << "function " << func_name << " found\n";
+		    *func_die = die;
+		    return;
+	    }
+    }
+
+    // process siblings
+    Dwarf_Die sibling = nullptr;
+    if(dwarf_siblingof_b(dbg, die, true, &sibling, &error) == DW_DLV_OK && sibling) {
+        search_func_recursively_by_name(
+            dbg, sibling, func_die, searched_name
+        );
+        dwarf_dealloc(dbg, sibling, DW_DLA_DIE);
+        if(*func_die != nullptr)
+                return;
+    }
+}
+
 void debugger::get_func_die_by_pc(Dwarf_Debug dbg, Dwarf_Die* func_die, uint64_t pc) {
     //int i = 0;
     for (;;) {
@@ -967,6 +1023,64 @@ void debugger::get_func_die_by_pc(Dwarf_Debug dbg, Dwarf_Die* func_die, uint64_t
 
         if(res == DW_DLV_OK && sibling_die) {
             iterate_dies_recursively(dbg, sibling_die, func_die, pc);
+            dwarf_dealloc(dbg, sibling_die, DW_DLA_DIE);
+            if(*func_die != nullptr)
+                    return;
+        }
+        //i++;
+    }
+}
+
+void debugger::get_func_die_by_name(Dwarf_Debug dbg, Dwarf_Die* func_die, const std::string& name) {
+    //int i = 0;
+    for (;;) {
+        Dwarf_Unsigned cu_header_length = 0;
+        Dwarf_Half version_stamp = 0;
+        Dwarf_Unsigned abbrev_offset = 0;
+        Dwarf_Half address_size = 0;
+        Dwarf_Half length_size = 0;
+        Dwarf_Half extension_size = 0;
+        Dwarf_Sig8 type_signature;
+        Dwarf_Unsigned typeoffset = 0;
+        Dwarf_Unsigned next_cu_header_offset = 0;
+        Dwarf_Half header_cu_type = 0;
+        Dwarf_Error error;
+
+        //std::cout << "iteration " << i << "\n";
+        int res = dwarf_next_cu_header_d(
+            dbg,
+            true, // is_info
+            &cu_header_length,
+            &version_stamp,
+            &abbrev_offset,
+            &address_size,
+            &length_size,
+            &extension_size,
+            &type_signature,
+            &typeoffset,
+            &next_cu_header_offset,
+            &header_cu_type,
+            &error
+        );
+
+        // done
+        if(res == DW_DLV_NO_ENTRY) {
+            break;
+        }
+
+        Dwarf_Die sibling_die = nullptr;
+        res = dwarf_siblingof_b(
+            dbg,
+            nullptr, // dw_die
+            true,    // dw_is_info
+            &sibling_die, // dw_return_siblingdie
+            &error
+        );
+
+        if(res == DW_DLV_OK && sibling_die) {
+	    std::cerr << "before search_func_recursively_by_name\n";
+            search_func_recursively_by_name(dbg, sibling_die, func_die, name);
+	    std::cerr << "after search_func_recursively_by_name\n";
             dwarf_dealloc(dbg, sibling_die, DW_DLA_DIE);
             if(*func_die != nullptr)
                     return;
@@ -1044,6 +1158,42 @@ void debugger::step_over() {
 		}
 //#endif
 	}
+}
+
+void debugger::set_breakpoint_at_function(const std::string& name) {
+	Dwarf_Die func_die = nullptr;
+	std::cerr << "before get_func_die_by_name\n";
+        get_func_die_by_name(dbg, &func_die, name);
+	std::cerr << "after get_func_die_by_name\n";
+	Dwarf_Addr lowpc;
+        Dwarf_Addr highpc;
+        if(func_die != nullptr) {
+                get_func_pcs(dbg, func_die, &lowpc, &highpc);
+                dwarf_dealloc(dbg, func_die, DW_DLA_DIE);
+
+                Dwarf_Line_Context line_context = 0;
+                Dwarf_Line line_die = nullptr;
+                int line_index = 0;
+                get_line_die_by_pc(dbg, &line_die, &line_index, lowpc, &line_context);
+                std::cerr << "here 4 line_index " << line_index << "\n";
+
+                int sres = 0;
+                Dwarf_Line  *linebuf = 0;
+                Dwarf_Signed linecount = 0;
+                Dwarf_Error error;
+                //sres = dwarf_srclines_from_linecontext(line_context,
+                //              &linebuf,&linecount, &error);
+                get_linebuf_by_pc(dbg, &linebuf, &linecount, lowpc, &line_context);
+                //std::cerr << "here 6 line_index: " << line_index << " linecount " << linecount << "\n";
+                Dwarf_Addr addr = 0;
+		line_index++;
+                dwarf_lineaddr(linebuf[line_index], &addr, &error);
+		auto load_address = offset_dwarf_address(addr);
+		set_breakpoint_at_address(load_address);
+	}
+}
+
+void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned line) {
 }
 
 void breakpoint::enable() {
@@ -1156,6 +1306,9 @@ void debugger::handle_command(const std::string& line) {
 		std::string addr {args[1], 2}; //naively assume that the user has written 0xADDRESS
 		set_breakpoint_at_address(std::stol(addr, 0, 16));
 	}
+	else if(is_prefix(command, "breakf")) {
+                set_breakpoint_at_function(args[1]);
+        }
 	else if (is_prefix(command, "register")) {
 		if (is_prefix(args[1], "dump")) {
 			dump_registers();
