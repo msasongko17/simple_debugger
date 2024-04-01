@@ -181,6 +181,8 @@ private:
 	void set_breakpoint_at_source_line(const std::string& file, unsigned line);
 	void get_func_die_by_name(Dwarf_Debug dbg, Dwarf_Die* func_die, const std::string& name);
 	void search_func_recursively_by_name(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Die* func_die, const std::string& searched_name);
+	void get_line_die_by_file_lineno(Dwarf_Debug dbg, Dwarf_Line* line_die, const std::string& file, unsigned lineno, Dwarf_Line_Context* line_context);
+	int get_line_entry_by_file_lineno(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line* line_die, const std::string& searched_filename, unsigned lineno, Dwarf_Line_Context* line_context);
 };
 
 uint64_t debugger::get_pc() {
@@ -329,6 +331,131 @@ void debugger::handle_sigtrap(siginfo_t info) {
 			return;
 	}
 //#endif
+}
+
+int debugger::get_line_entry_by_file_lineno(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line* line_die, const std::string& searched_filename, unsigned lineno, Dwarf_Line_Context* line_context)
+{
+    /* EXAMPLE: DWARF2-DWARF5  access.  */
+    Dwarf_Line  *linebuf = 0;
+    Dwarf_Signed linecount = 0;
+    Dwarf_Line  *linebuf_actuals = 0;
+    Dwarf_Signed linecount_actuals = 0;
+    //Dwarf_Line_Context line_context = 0;
+    Dwarf_Small  table_count = 0;
+    Dwarf_Unsigned lineversion = 0;
+    int sres = 0;
+    /* ... */
+    /*  we use 'return' here to signify we can do nothing more
+        at this point in the code. */
+    sres = dwarf_srclines_b(cu_die,&lineversion,
+        &table_count,line_context,error);
+    if (sres != DW_DLV_OK) {
+        /*  Handle the DW_DLV_NO_ENTRY  or DW_DLV_ERROR
+            No memory was allocated so there nothing
+            to dealloc. */
+        return sres;
+    }
+
+    if (table_count == 1) {
+    	Dwarf_Signed i = 0;
+        Dwarf_Signed baseindex = 0;
+        Dwarf_Signed file_count = 0;
+        Dwarf_Signed endindex = 0;
+        /*  Standard dwarf 2,3,4, or 5 line table */
+        /*  Do something. */
+
+        /*  First let us index through all the files listed
+            in the line table header. */
+        sres = dwarf_srclines_files_indexes(*line_context,
+            &baseindex,&file_count,&endindex,error);
+        if (sres != DW_DLV_OK) {
+            /* Something badly wrong! */
+            return sres;
+        }
+        /*  Works for DWARF2,3,4 (one-based index)
+            and DWARF5 (zero-based index) */
+	bool file_found = false;
+        for (i = baseindex; i < endindex; i++) {
+            Dwarf_Unsigned dirindex = 0;
+            Dwarf_Unsigned modtime = 0;
+            Dwarf_Unsigned flength = 0;
+            Dwarf_Form_Data16 *md5data = 0;
+            int vres = 0;
+            const char *name = 0;
+
+            vres = dwarf_srclines_files_data_b(*line_context,i,
+                &name,&dirindex, &modtime,&flength,
+                &md5data,error);
+            //std::cerr << "file " << name << "\n";
+	    const std::string& filename(name);
+	    if(filename == searched_filename) {
+		    std::cerr << "file " << filename << " is found\n";
+		    file_found = true;
+		    break;
+	    }
+            if (vres != DW_DLV_OK) {
+                /* something very wrong. */
+                return vres;
+            }
+            /* do something */
+        }
+
+	if(file_found == false)
+		return 2;
+
+        /*  For this case where we have a line table we will likely
+            wish to get the line details: */
+        sres = dwarf_srclines_from_linecontext(*line_context,
+            &linebuf,&linecount,
+            error);
+        if (sres != DW_DLV_OK) {
+            /* Error. Clean up the context information. */
+            dwarf_srclines_dealloc_b(*line_context);
+            return sres;
+        }
+        /* The lines are normal line table lines. */
+        int index = -1;
+	for (i = 0; i < linecount; ++i) {
+            /* use linebuf[i] */
+            //std::cerr << "address " << linebuf[i]->li_address << ", line " << linebuf[i]->li_line << "\n";
+            //long long unsigned int lineno;
+            Dwarf_Error error;
+	    long long unsigned int line_no;
+	    char *file_name;
+//#if 0
+            dwarf_lineno(linebuf[i], &line_no, &error);
+	    dwarf_linesrc(linebuf[i], &file_name, &error);
+	    std::string filename(file_name);
+	    std::cerr << "file " << filename << " and line " << line_no << "\n";
+	    if(filename.erase(0, filename.find_last_of("/")+1) == searched_filename && lineno == line_no) {
+		std::cerr << "file " << filename << " and line " << line_no << " is found\n";
+		*line_die = linebuf[i];
+		break;
+	    }
+#if 0
+            char *filename;
+            Dwarf_Addr line_addr;
+            dwarf_linesrc(linebuf[i], &filename, &error);
+#endif
+#if 0
+            Dwarf_Addr line_addr;
+            dwarf_lineaddr(linebuf[i], &line_addr, &error);
+            if(pc >= line_addr) {
+                    index = i;
+            } else {
+                    break;
+            }
+#endif
+            //std::cerr << "file " << filename << ", line no " << std::dec << lineno << ", address " << std::hex << line_addr << "\n";
+        }
+        //dwarf_srclines_dealloc_b(line_context);
+        /*  All the memory is released, the line_context
+            and linebuf zeroed now as a reminder they are stale */
+        linebuf = 0;
+        //line_context = 0;
+        linecount = 0;
+    }
+    return DW_DLV_OK;
 }
 
 int debugger::get_line_entry(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line* line_die, int* line_index, uint64_t pc, Dwarf_Line_Context* line_context)
@@ -688,6 +815,64 @@ void debugger::get_line_die_by_pc(Dwarf_Debug dbg, Dwarf_Line* line_die, int* li
 		    //break;
         }
         i++;
+    }
+}
+
+void debugger::get_line_die_by_file_lineno(Dwarf_Debug dbg, Dwarf_Line* line_die, const std::string& file, unsigned lineno, Dwarf_Line_Context* line_context) {
+	int i = 0;
+    for (;;) {
+        Dwarf_Unsigned cu_header_length = 0;
+        Dwarf_Half version_stamp = 0;
+        Dwarf_Unsigned abbrev_offset = 0;
+        Dwarf_Half address_size = 0;
+        Dwarf_Half length_size = 0;
+        Dwarf_Half extension_size = 0;
+        Dwarf_Sig8 type_signature;
+        Dwarf_Unsigned typeoffset = 0;
+        Dwarf_Unsigned next_cu_header_offset = 0;
+        Dwarf_Half header_cu_type = 0;
+        Dwarf_Error error;
+
+        //std::cout << "iteration " << i << "\n";
+        int res = dwarf_next_cu_header_d(
+            dbg,
+            true, // is_info
+            &cu_header_length,
+            &version_stamp,
+            &abbrev_offset,
+            &address_size,
+            &length_size,
+            &extension_size,
+            &type_signature,
+            &typeoffset,
+            &next_cu_header_offset,
+            &header_cu_type,
+            &error
+        );
+
+        // done
+        if(res == DW_DLV_NO_ENTRY) {
+            break;
+        }
+
+        Dwarf_Die sibling_die = nullptr;
+        res = dwarf_siblingof_b(
+            dbg,
+            nullptr, // dw_die
+            true,    // dw_is_info
+            &sibling_die, // dw_return_siblingdie
+            &error
+        );
+
+        if(res == DW_DLV_OK && sibling_die) {
+            //iterate_dies_recursively(dbg, sibling_die);
+            get_line_entry_by_file_lineno(sibling_die,&error, line_die, file, lineno, line_context);
+            //std::cerr << "after get_line_entry, *line_index " << *line_index << "\n";
+            dwarf_dealloc(dbg, sibling_die, DW_DLA_DIE);
+            //if(*line_die != nullptr)
+                    //break;
+        }
+	i++;
     }
 }
 
@@ -1193,7 +1378,17 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
 	}
 }
 
-void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned line) {
+void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned lineno) {
+	Dwarf_Line_Context line_context = 0;
+	Dwarf_Line line_die = nullptr;
+	int line_index = 0;
+	std::cerr << "search for " << file << " and line " << lineno << "\n";
+	get_line_die_by_file_lineno(dbg, &line_die, file, lineno, &line_context);
+	Dwarf_Error error;
+	Dwarf_Addr addr = 0;
+	dwarf_lineaddr(line_die, &addr, &error);
+	auto load_address = offset_dwarf_address(addr);
+	set_breakpoint_at_address(load_address);
 }
 
 void breakpoint::enable() {
@@ -1309,6 +1504,11 @@ void debugger::handle_command(const std::string& line) {
 	else if(is_prefix(command, "breakf")) {
                 set_breakpoint_at_function(args[1]);
         }
+	else if(is_prefix(command, "breakl")) {
+                auto file_and_line = split(args[1], ':');
+            	set_breakpoint_at_source_line(file_and_line[0], std::stoi(file_and_line[1]));
+        }
+	//void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned lineno)
 	else if (is_prefix(command, "register")) {
 		if (is_prefix(args[1], "dump")) {
 			dump_registers();
