@@ -183,6 +183,8 @@ private:
 	void search_func_recursively_by_name(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Die* func_die, const std::string& searched_name);
 	void get_line_die_by_file_lineno(Dwarf_Debug dbg, Dwarf_Line* line_die, const std::string& file, unsigned lineno, Dwarf_Line_Context* line_context);
 	int get_line_entry_by_file_lineno(Dwarf_Die cu_die,Dwarf_Error *error, Dwarf_Line* line_die, const std::string& searched_filename, unsigned lineno, Dwarf_Line_Context* line_context);
+	void print_backtrace();
+	void output_frame(Dwarf_Die func_die, int frame_number);
 };
 
 uint64_t debugger::get_pc() {
@@ -1473,6 +1475,55 @@ void debugger::continue_execution() {
 	wait_for_signal();
 }
 
+void debugger::output_frame(Dwarf_Die func_die, int frame_number = 0) {
+	Dwarf_Addr lowpc, highpc;
+        char* name = nullptr;
+        Dwarf_Error error;
+	std::cerr << "before get_func_pcs\n";
+        get_func_pcs(dbg, func_die, &lowpc, &highpc);
+	std::cerr << "after get_func_pcs\n";
+        dwarf_die_text(func_die, DW_AT_name, &name, &error);
+        std::cout << "frame #" << frame_number++ << ": 0x" << lowpc << ' ' << name << "\n";
+}
+
+void debugger::print_backtrace() {
+	Dwarf_Die func_die = nullptr;
+	std::cerr << "here 1\n";
+	get_func_die_by_pc(dbg, &func_die, get_offset_pc());
+	std::cerr << "here 2\n";
+	output_frame(func_die);
+	std::cerr << "here 3\n";
+
+	Dwarf_Error error;
+	auto frame_pointer = get_register_value(m_pid, reg::rbp);
+	std::cerr << "frame_pointer " << frame_pointer << "\n";
+	auto return_address = read_memory(frame_pointer+16);
+	//auto return_address = __builtin_extract_return_addr (__builtin_return_address (0));
+	std::cerr << "return_address " << return_address << "\n";
+	char* name = nullptr;
+	dwarf_die_text(func_die, DW_AT_name, &name, &error);
+	std::cerr << "here 4 " << name << "\n";
+	unsigned int i = 0;
+//#if 0
+	while (strcmp (name, "main") != 0) {
+		Dwarf_Die current_func = nullptr;
+		get_func_die_by_pc(dbg, &current_func, offset_load_address((uint64_t) return_address));
+		char* name1 = nullptr;
+		dwarf_die_text(current_func, DW_AT_name, &name1, &error);
+		std::cerr << "function 1 " << name1 << " " << i << " " << offset_load_address((uint64_t) return_address) << "\n";
+		name = name1;
+		output_frame(current_func);
+		frame_pointer = read_memory(frame_pointer);
+		std::cerr << "frame_pointer " << frame_pointer << "\n";
+		return_address = read_memory(frame_pointer+16);
+		//++i;
+		//return_address = __builtin_extract_return_addr (__builtin_return_address (1));
+		std::cerr << "return_address " << return_address << "\n";
+		//i++;
+	}	
+//#endif
+}
+
 std::vector<std::string> split(const std::string &s, char delimiter) {
         std::vector<std::string> out{};
         std::stringstream ss {s};
@@ -1561,7 +1612,10 @@ void debugger::handle_command(const std::string& line) {
 	}
 	else if(is_prefix(command, "stepover")) {
 		step_over();
-	} 
+	}
+        else if(is_prefix(command, "backtrace")) {
+		print_backtrace();
+	}	
 	else {
 		std::cerr << "Unknown command\n";
 	}
